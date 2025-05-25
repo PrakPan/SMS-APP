@@ -51,7 +51,7 @@ exports.submitForm = async (req, res) => {
 
         console.log('User:', user);
         
-        const customMessage = user.admin.customMessage || 'Thank you for submitting the form!';
+        const customMessage = user?.admin?.customMessage || 'Thank you for submitting the form!';
 
         console.log('Custom Message:', customMessage);
 

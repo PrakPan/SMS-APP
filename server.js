@@ -20,6 +20,10 @@ app.use(bodyParser.json());
 app.use('/api/admin', adminRoutes);
 app.use('/api/user', userRoutes);
 
+app.get("/", (req, res) => {
+  res.send("Hello");
+});
+
 // Create default admin if not exists
 const createDefaultAdmin = async () => {
     const adminExists = await Admin.findOne({ username: 'admin' });
