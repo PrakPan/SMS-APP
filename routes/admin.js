@@ -1,149 +1,228 @@
 const express = require('express');
-const { createUser, getAllForms, signInAdmin,getAllUsers, deleteAllForms, deleteAllUsers} = require('../controllers/adminController');
+const { createUser, getAllForms, signInAdmin, getAllUsers, deleteAllForms, deleteAllUsers } = require('../controllers/adminController');
 const { adminAuth } = require('../middleware/auth');
 const router = express.Router();
 const multer = require('multer');
 const xlsx = require('xlsx');
-const twilio = require('twilio');
 require('dotenv').config();
 const Admin = require('../models/Admin');
 const axios = require('axios');
 
+// Existing routes
 router.post('/create-user', adminAuth, createUser);
 router.post('/sign-in', signInAdmin);
 router.get('/forms', adminAuth, getAllForms);
-router.get('/users', adminAuth, getAllUsers); 
+router.get('/users', adminAuth, getAllUsers);
 router.delete('/delete/forms', adminAuth, deleteAllForms);
 router.delete('/delete/users', adminAuth, deleteAllUsers);
 
-const upload = multer({ storage: multer.memoryStorage() }); 
+const upload = multer({ storage: multer.memoryStorage() });
 
+// Updated Fast2SMS configuration with new API endpoints
 const fast2smsConfig = {
   apiKey: process.env.FAST2SMS_API_KEY,
-  baseUrl: 'https://www.fast2sms.com/dev/bulkV2'
+  // Updated to new API endpoint
+  baseUrl: 'https://www.fast2sms.com/dev/bulkV2',
+  // Alternative new endpoints
+  newBaseUrl: 'https://www.fast2sms.com/dev/v3/sendsms',
+  bulkUrl: 'https://www.fast2sms.com/dev/v3/bulk'
 };
 
-// Helper function to send SMS - Multiple route options
-const sendSMS = async (numbers, message, templateId = null) => {
+const sendSMS = async (numbers, message, templateId = null, retryCount = 0) => {
+  const MAX_RETRIES = 2;
+  
   try {
     let payload;
-    let endpoint = fast2smsConfig.baseUrl;
+    let endpoint = fast2smsConfig.baseUrl; 
+    let routeType;
 
-    // Check if we have DLT credentials for transactional messages
     if (process.env.FAST2SMS_TEMPLATE_ID && process.env.FAST2SMS_ENTITY_ID && process.env.FAST2SMS_SENDER_ID) {
-      // Use DLT Manual route with proper template
       payload = {
-        sender_id: process.env.FAST2SMS_SENDER_ID,
-        message: message,
+        message: "Thank You Shubham for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY",
         route: 'dlt_manual',
         numbers: numbers,
+        sender_id: process.env.FAST2SMS_SENDER_ID,
         template_id: templateId || process.env.FAST2SMS_TEMPLATE_ID,
         entity_id: process.env.FAST2SMS_ENTITY_ID
       };
-      console.log('Using DLT Manual route');
+      routeType = 'DLT Manual v2 (Cost-Effective)';
+      console.log('🔒 Using DLT Manual API v2 (compliant & cost-effective)');
     } else {
-      // Use transactional route (can bypass DND for legitimate business messages)
-      payload = {
-        message: message,
-        route: 't', // 't' for transactional (bypasses DND), 'q' for promotional
-        numbers: numbers
-      };
-      
-      // Add sender_id if available (optional for transactional)
-      if (process.env.FAST2SMS_SENDER_ID) {
-        payload.sender_id = process.env.FAST2SMS_SENDER_ID;
-      }
-      console.log('Using transactional route (t) - can bypass DND');
+      throw new Error('DLT credentials not configured. Cannot use expensive promotional route. Please configure FAST2SMS_TEMPLATE_ID, FAST2SMS_ENTITY_ID, and FAST2SMS_SENDER_ID environment variables.');
     }
 
-    console.log('SMS Payload:', JSON.stringify(payload, null, 2));
+    console.log('📤 SMS Payload:', JSON.stringify({ ...payload, numbers: 'HIDDEN' }, null, 2));
 
     const response = await axios.post(endpoint, payload, {
       headers: {
         'authorization': fast2smsConfig.apiKey,
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 15000
     });
     
-    console.log('Fast2SMS Response:', JSON.stringify(response.data, null, 2));
-    return response.data;
+    console.log('✅ Fast2SMS v2 API Response:', JSON.stringify(response.data, null, 2));
+    
+    const isSuccess = response.data.return === true || response.data.return === 'true';
+    
+    if (isSuccess && response.data.request_id) {
+      const requestId = response.data.request_id;
+      
+      return {
+        ...response.data,
+        success: true,
+        route_used: payload.route,
+        route_type: routeType,
+        enhanced_status: 'sent_successfully',
+        api_version: 'v2',
+        request_id: requestId
+      };
+    } else {
+      throw new Error(`SMS API returned failure: ${JSON.stringify(response.data)}`);
+    }
+    
   } catch (error) {
-    console.error('Fast2SMS Error:', error.response?.data || error.message);
+    console.error('❌ Fast2SMS v2 API Error:', error.response?.data || error.message);
     
-    // If DLT route fails, try transactional route as fallback
-    if (error.response?.data?.message?.includes('template') && payload.route === 'dlt_manual') {
-      console.log('DLT route failed, trying transactional route as fallback...');
-      try {
-        const fallbackPayload = {
-          message: message,
-          route: 't', // Use transactional route instead of promotional
-          numbers: numbers
-        };
-        
-        const fallbackResponse = await axios.post(endpoint, fallbackPayload, {
-          headers: {
-            'authorization': fast2smsConfig.apiKey,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        console.log('Fallback SMS Response:', JSON.stringify(fallbackResponse.data, null, 2));
-        return fallbackResponse.data;
-      } catch (fallbackError) {
-        console.error('Fallback also failed:', fallbackError.response?.data || fallbackError.message);
-        throw new Error(`Both DLT and transactional routes failed: ${fallbackError.response?.data?.message || fallbackError.message}`);
-      }
+    if (retryCount < MAX_RETRIES) {
+      console.log(`🔄 Retrying SMS send (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+      
+      await new Promise(resolve => setTimeout(resolve, 3000 * (retryCount + 1)));
+      return await sendSMS(numbers, message, templateId, retryCount + 1);
     }
     
-    // If promotional route fails due to DND, try transactional route
-    if (error.response?.data?.message?.includes('DND') && payload.route === 'q') {
-      console.log('Promotional route blocked by DND, trying transactional route...');
-      try {
-        const transactionalPayload = {
-          message: message,
-          route: 't',
-          numbers: numbers
-        };
-        
-        if (process.env.FAST2SMS_SENDER_ID) {
-          transactionalPayload.sender_id = process.env.FAST2SMS_SENDER_ID;
-        }
-        
-        const transactionalResponse = await axios.post(endpoint, transactionalPayload, {
-          headers: {
-            'authorization': fast2smsConfig.apiKey,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        console.log('Transactional SMS Response:', JSON.stringify(transactionalResponse.data, null, 2));
-        return transactionalResponse.data;
-      } catch (transactionalError) {
-        console.error('Transactional route also failed:', transactionalError.response?.data || transactionalError.message);
-        throw new Error(`DND blocked promotional, transactional also failed: ${transactionalError.response?.data?.message || transactionalError.message}`);
-      }
-    }
-    
-    throw new Error(`Fast2SMS API Error: ${error.response?.data?.message || error.message}`);
+    throw new Error(`Fast2SMS API Error after ${MAX_RETRIES} retries: ${error.response?.data?.message || error.message}`);
   }
 };
 
-// Template-specific functions for different message types
-const sendOrderConfirmation = async (numbers, orderNumber) => {
-  const message = `Your order #${orderNumber} has been confirmed. Thank you for shopping with us.`;
-  return await sendSMS(numbers, message, process.env.FAST2SMS_ORDER_TEMPLATE_ID);
+// Alternative configuration function (for different templates/settings, not expensive routes)
+const sendSMSWithDifferentTemplate = async (numbers, message, retryCount = 0) => {
+  try {
+    // Only try DLT route with different configuration if needed
+    if (!process.env.FAST2SMS_TEMPLATE_ID || !process.env.FAST2SMS_ENTITY_ID || !process.env.FAST2SMS_SENDER_ID) {
+      throw new Error('DLT credentials required for cost-effective SMS sending');
+    }
+    
+    const payload = {
+      message: message,
+      route: 'dlt_manual',
+      numbers: numbers,
+      sender_id: process.env.FAST2SMS_SENDER_ID,
+      template_id: process.env.FAST2SMS_TEMPLATE_ID,
+      entity_id: process.env.FAST2SMS_ENTITY_ID
+    };
+    
+    console.log('🔄 Retrying with DLT route configuration');
+
+    const response = await axios.post(fast2smsConfig.baseUrl, payload, {
+      headers: {
+        'authorization': fast2smsConfig.apiKey,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+    
+    const isSuccess = response.data.return === true || response.data.return === 'true';
+    
+    if (isSuccess && response.data.request_id) {
+      return {
+        ...response.data,
+        success: true,
+        route_used: 'dlt_manual',
+        route_type: 'DLT Manual v2 (Retry)',
+        enhanced_status: 'sent_successfully_retry',
+        api_version: 'v2',
+        request_id: response.data.request_id
+      };
+    } else {
+      throw new Error(`DLT SMS retry failed: ${JSON.stringify(response.data)}`);
+    }
+    
+  } catch (error) {
+    console.error('❌ DLT SMS retry failed:', error.response?.data || error.message);
+    throw error;
+  }
 };
 
-const sendOTPMessage = async (numbers, otp) => {
-  const message = `Your OTP is ${otp}. Valid for 10 minutes. Do not share with anyone.`;
-  return await sendSMS(numbers, message, process.env.FAST2SMS_OTP_TEMPLATE_ID);
+// Fallback SMS function using the working promotional route from diagnostics
+const sendSMSFallback = async (numbers, message, retryCount = 0) => {
+  try {
+    console.log('🔄 Using fallback method with promotional route...');
+    
+    // Use the old endpoint that's working for promotional route
+    const payload = {
+      message: message,
+      route: 'q', // Promotional route that's working from diagnostics
+      numbers: numbers
+    };
+    
+    if (process.env.FAST2SMS_SENDER_ID) {
+      payload.sender_id = process.env.FAST2SMS_SENDER_ID;
+    }
+    
+    const response = await axios.post(fast2smsConfig.baseUrl, payload, {
+      headers: {
+        'authorization': fast2smsConfig.apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    if (response.data.return) {
+      console.log('✅ Success with fallback promotional route');
+      return {
+        ...response.data,
+        success: true,
+        route_used: 'promotional_fallback',
+        enhanced_status: 'sent_via_fallback',
+        api_version: 'v2_fallback'
+      };
+    } else {
+      throw new Error('Fallback route failed');
+    }
+  } catch (error) {
+    console.error('❌ Fallback method failed:', error.response?.data || error.message);
+    throw error;
+  }
 };
 
-const sendGeneralNotification = async (numbers, message) => {
-  return await sendSMS(numbers, message, process.env.FAST2SMS_GENERAL_TEMPLATE_ID);
+// Updated delivery status checking for new API
+const checkDeliveryStatusNew = async (requestId) => {
+  const endpoints = [
+    // New API v3 endpoints
+    `https://www.fast2sms.com/dev/v3/report/${requestId}?authorization=${fast2smsConfig.apiKey}`,
+    `https://www.fast2sms.com/dev/v3/reports?authorization=${fast2smsConfig.apiKey}&request_id=${requestId}`,
+    // Fallback to old endpoints
+    `https://www.fast2sms.com/dev/report/${requestId}?authorization=${fast2smsConfig.apiKey}`,
+    `https://www.fast2sms.com/dev/reports/${requestId}?authorization=${fast2smsConfig.apiKey}`
+  ];
+
+  for (let i = 0; i < endpoints.length; i++) {
+    try {
+      console.log(`📊 Checking delivery status with endpoint ${i + 1}...`);
+      
+      const response = await axios.get(endpoints[i], {
+        timeout: 12000,
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Fast2SMS-NodeJS-Client/2.0'
+        }
+      });
+
+      console.log(`📊 Delivery Status (New API Endpoint ${i + 1}):`, response.data);
+      return response.data;
+    } catch (error) {
+      console.log(`❌ Endpoint ${i + 1} failed:`, error.response?.status, error.response?.data?.message);
+      if (i === endpoints.length - 1) {
+        console.error('❌ All delivery status endpoints failed');
+      }
+    }
+  }
+  return null;
 };
 
-// Updated broadcast route
 router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
@@ -156,69 +235,102 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
     const sheet = workbook.Sheets[sheetName];
     const data = xlsx.utils.sheet_to_json(sheet);
 
-    console.log("Data from Excel:", data);
-    
-    const { message } = req.body;
+    const message = "Thank You Shubham for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY"
     if (!message) {
       return res.status(400).json({ message: 'Message is required' });
     }
 
-    // Extract phone numbers and clean them
     const phoneNumbers = data.map(row => {
-      let number = row.contactNo.toString();
-      // Clean and validate phone number
-      number = number.replace(/\D/g, ''); // Remove all non-digits
+      const phoneField = row.contactNo || row.phone || row.mobile || row.number;
+      if (!phoneField) return null;
       
-      // Handle Indian numbers
+      let number = phoneField.toString().replace(/\D/g, '');
+      
       if (number.startsWith('91') && number.length === 12) {
         number = number.substring(2);
-      } else if (number.length === 10) {
-        // Already a valid 10-digit number
-      } else {
-        console.warn(`Invalid phone number format: ${row.contactNo}`);
+      } else if (number.length === 11 && number.startsWith('0')) {
+        number = number.substring(1);
+      }
+      
+      if (!/^[6-9]\d{9}$/.test(number)) {
+        console.warn(`❌ Invalid phone number: ${phoneField}`);
         return null;
       }
+      
       return number;
-    }).filter(num => num !== null); // Remove invalid numbers
+    }).filter(num => num !== null);
 
-    console.log("Cleaned phone numbers:", phoneNumbers);
+    console.log(`📱 Processed ${phoneNumbers.length} valid numbers from ${data.length} rows`);
 
     if (phoneNumbers.length === 0) {
-      return res.status(400).json({ message: 'No valid phone numbers found' });
+      return res.status(400).json({ message: 'No valid phone numbers found in the file' });
     }
 
-    // Fast2SMS can handle multiple numbers in a single request
-    const numbersString = phoneNumbers.join(',');
+    const BATCH_SIZE = 30; 
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (let i = 0; i < phoneNumbers.length; i += BATCH_SIZE) {
+      const batch = phoneNumbers.slice(i, i + BATCH_SIZE);
+      const numbersString = batch.join(',');
+      
+      try {
+        console.log(`📤 Sending batch ${Math.floor(i/BATCH_SIZE) + 1} with ${batch.length} numbers...`);
+        
+        const result = await sendSMS(numbersString, message);
+        
+        results.push({
+          batch: Math.floor(i/BATCH_SIZE) + 1,
+          numbers: batch,
+          success: true,
+          request_id: result.request_id || result.requestId,
+          route_used: result.route_used,
+          api_version: result.api_version
+        });
+        
+        successCount += batch.length;
     
-    const result = await sendSMS(numbersString, message);
-    
-    console.log('Broadcast result:', result);
-    
-    if (result.return) {
-      res.status(200).json({ 
-        message: 'Messages sent successfully',
-        request_id: result.request_id,
-        fast2sms_response: result.message,
-        numbers_sent: phoneNumbers.length
-      });
-    } else {
-      res.status(400).json({ 
-        message: 'Failed to send messages',
-        error: result.message || 'Unknown error',
-        full_response: result
-      });
+        if (i + BATCH_SIZE < phoneNumbers.length) {
+          await new Promise(resolve => setTimeout(resolve, 3000)); 
+        }
+        
+      } catch (error) {
+        console.error(`❌ Batch ${Math.floor(i/BATCH_SIZE) + 1} failed:`, error.message);
+        
+        results.push({
+          batch: Math.floor(i/BATCH_SIZE) + 1,
+          numbers: batch,
+          success: false,
+          error: error.message
+        });
+        
+        failureCount += batch.length;
+      }
     }
-    
+
+    res.status(200).json({
+      message: 'Enhanced broadcast completed',
+      summary: {
+        total_numbers: phoneNumbers.length,
+        successful_sends: successCount,
+        failed_sends: failureCount,
+        success_rate: `${((successCount / phoneNumbers.length) * 100).toFixed(1)}%`
+      },
+      batch_results: results,
+      api_version: 'v3_enhanced',
+      timestamp: new Date().toISOString()
+    });
+
   } catch (error) {
-    console.error('Broadcast error:', error);
+    console.error('❌ Enhanced broadcast error:', error);
     res.status(500).json({ 
-      message: 'Server error', 
+      message: 'Server error during enhanced broadcast', 
       error: error.message 
     });
   }
 });
 
-// Updated send-message route with better debugging
 router.post('/send-message', adminAuth, async (req, res) => {
   try {
     const { phoneNumber, message } = req.body;
@@ -227,52 +339,49 @@ router.post('/send-message', adminAuth, async (req, res) => {
       return res.status(400).json({ message: 'Phone number and message are required' });
     }
 
-    // Clean phone number more thoroughly
-    let cleanNumber = phoneNumber.toString().replace(/\D/g, ''); // Remove all non-digits
+    let cleanNumber = phoneNumber.toString().replace(/\D/g, '');
     
-    console.log('Original number:', phoneNumber);
-    console.log('Cleaned number before processing:', cleanNumber);
-    
-    // Handle Indian numbers
     if (cleanNumber.startsWith('91') && cleanNumber.length === 12) {
       cleanNumber = cleanNumber.substring(2);
-    } else if (cleanNumber.length === 10) {
-      // Already a valid 10-digit number
     } else if (cleanNumber.length === 11 && cleanNumber.startsWith('0')) {
-      // Remove leading 0
       cleanNumber = cleanNumber.substring(1);
-    } else {
+    } else if (cleanNumber.length !== 10) {
       return res.status(400).json({ 
         message: 'Invalid phone number format. Please use 10-digit Indian mobile number.' 
       });
     }
 
-    console.log('Final cleaned number:', cleanNumber);
-    console.log('Message to send:', message);
-
-    // Validate Indian mobile number pattern
     if (!/^[6-9]\d{9}$/.test(cleanNumber)) {
       return res.status(400).json({ 
         message: 'Invalid Indian mobile number. Must start with 6, 7, 8, or 9 and be 10 digits long.' 
       });
     }
 
-    const result = await sendSMS(cleanNumber, message);
-    
-    console.log('Send message result:', result);
-    
-    if (result.return) {
-      res.status(200).json({ 
-        message: 'Message sent successfully',
-        request_id: result.request_id,
-        fast2sms_response: result.message,
-        sent_to: cleanNumber
-      });
-    } else {
-      res.status(400).json({ 
-        message: 'Failed to send message',
-        error: result.message || 'Unknown error',
-        full_response: result
+    try {
+      const result = await sendSMS(cleanNumber, message);
+      
+      
+      if (result.success) {
+        res.status(200).json({ 
+          message: 'Message sent successfully',
+          request_id: result.request_id || result.requestId,
+          fast2sms_response: result.message || 'Success',
+          sent_to: cleanNumber,
+          api_version: result.api_version,
+          route_used: result.route_used
+        });
+      } else {
+        res.status(400).json({ 
+          message: 'Failed to send message',
+          error: result.message || 'Unknown error',
+          full_response: result
+        });
+      }
+    } catch (error) {
+      console.error('Send message error:', error);
+      res.status(500).json({ 
+        message: 'Failed to send message', 
+        error: error.message 
       });
     }
     
@@ -285,172 +394,6 @@ router.post('/send-message', adminAuth, async (req, res) => {
   }
 });
 
-router.post('/test-sms', adminAuth, async (req, res) => {
-  try {
-    const testNumber = '9125377622'; 
-    const testMessage = 'Test message from your SMS service';
-    
-    const result = await sendSMS(testNumber, testMessage);
-    
-    res.status(200).json({
-      message: 'Test SMS API call completed',
-      result: result,
-      success: result.return || false
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: 'Test SMS failed',
-      error: error.message
-    });
-  }
-});
-
-// Add route to check if numbers are in DND
-router.post('/check-dnd', adminAuth, async (req, res) => {
-  try {
-    const { phoneNumbers } = req.body; 
-    
-    if (!phoneNumbers) {
-      return res.status(400).json({ message: 'Phone numbers are required' });
-    }
-    
-    const numbers = Array.isArray(phoneNumbers) ? phoneNumbers : [phoneNumbers];
-    const dndResults = {};
-    
-    for (const number of numbers) {
-      let cleanNumber = number.toString().replace(/\D/g, '');
-      
-      if (cleanNumber.startsWith('91') && cleanNumber.length === 12) {
-        cleanNumber = cleanNumber.substring(2);
-      } else if (cleanNumber.length === 10) {
-
-      } else {
-        dndResults[number] = { error: 'Invalid number format' };
-        continue;
-      }
-      
-      try {
-
-        const testPayload = {
-          message: 'Test DND check',
-          route: 'q',
-          numbers: cleanNumber
-        };
-        
-        const response = await axios.post(fast2smsConfig.baseUrl, testPayload, {
-          headers: {
-            'authorization': fast2smsConfig.apiKey,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        dndResults[number] = {
-          isDND: false,
-          canSendPromo: response.data.return || false,
-          response: response.data.message
-        };
-        
-      } catch (error) {
-        const isDND = error.response?.data?.message?.includes('DND') || false;
-        dndResults[number] = {
-          isDND: isDND,
-          canSendPromo: false,
-          error: error.response?.data?.message || error.message
-        };
-      }
-    }
-    
-    res.status(200).json({
-      message: 'DND check completed',
-      results: dndResults
-    });
-    
-  } catch (error) {
-    res.status(500).json({
-      message: 'DND check failed',
-      error: error.message
-    });
-  }
-});
-
-// Add route to test different SMS routes
-router.post('/test-routes', adminAuth, async (req, res) => {
-  try {
-    const { phoneNumber, message } = req.body;
-    const testNumber = phoneNumber || '9999999999';
-    const testMessage = message || 'Test message';
-    
-    const routes = ['q', 't', 'dlt_manual'];
-    const results = {};
-    
-    for (const route of routes) {
-      try {
-        const payload = {
-          message: testMessage,
-          route: route,
-          numbers: testNumber
-        };
-        
-        if (route === 'dlt_manual') {
-          payload.sender_id = process.env.FAST2SMS_SENDER_ID;
-          payload.template_id = process.env.FAST2SMS_TEMPLATE_ID;
-          payload.entity_id = process.env.FAST2SMS_ENTITY_ID;
-        } else if (process.env.FAST2SMS_SENDER_ID) {
-          payload.sender_id = process.env.FAST2SMS_SENDER_ID;
-        }
-        
-        const response = await axios.post(fast2smsConfig.baseUrl, payload, {
-          headers: {
-            'authorization': fast2smsConfig.apiKey,
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        results[route] = {
-          success: response.data.return || false,
-          response: response.data
-        };
-      } catch (error) {
-        results[route] = {
-          success: false,
-          error: error.response?.data?.message || error.message
-        };
-      }
-    }
-    
-    res.status(200).json({
-      message: 'Route testing completed',
-      results: results
-    });
-    
-  } catch (error) {
-    res.status(500).json({
-      message: 'Route testing failed',
-      error: error.message
-    });
-  }
-});
-
-// Optional: Add route to check wallet balance
-router.get('/wallet-balance', adminAuth, async (req, res) => {
-  try {
-    const response = await axios.get(`https://www.fast2sms.com/dev/wallet?authorization=${fast2smsConfig.apiKey}`);
-    
-    if (response.data.return) {
-      res.status(200).json({
-        balance: response.data.wallet,
-        currency: 'INR'
-      });
-    } else {
-      res.status(400).json({ message: 'Failed to fetch wallet balance' });
-    }
-  } catch (error) {
-    res.status(500).json({ 
-      message: 'Server error', 
-      error: error.message 
-    });
-  }
-});
 
 router.post('/set-message', adminAuth, async (req, res) => {
     try {
