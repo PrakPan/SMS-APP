@@ -335,7 +335,7 @@ router.post('/send-message', adminAuth, async (req, res) => {
   try {
     const { phoneNumber, message } = req.body;
 
-    if (!phoneNumber || !message) {
+    if (!phoneNumber) {
       return res.status(400).json({ message: 'Phone number and message are required' });
     }
 
