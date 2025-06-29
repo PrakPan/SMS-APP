@@ -26,7 +26,7 @@ const sendSMS = async (numbers, message, templateId = null, retryCount = 0) => {
 
     if (process.env.FAST2SMS_TEMPLATE_ID && process.env.FAST2SMS_ENTITY_ID && process.env.FAST2SMS_SENDER_ID) {
       payload = {
-        message: "Thank You Shubham for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY",
+        message: "Thank You  for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY",
         route: 'dlt_manual',
         numbers: numbers,
         sender_id: process.env.FAST2SMS_SENDER_ID,
