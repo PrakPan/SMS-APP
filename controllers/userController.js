@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const twilioClient = require('../twilio/twilio');
 require('dotenv').config();
-
+const axios = require('axios');
 
 const fast2smsConfig = {
   apiKey: process.env.FAST2SMS_API_KEY,
@@ -157,7 +157,7 @@ exports.submitForm = async (req, res) => {
               });
             }
         
-        
+              let message ="Hi";
               const result = await sendSMS(cleanNumber, message);
               
               
