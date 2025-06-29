@@ -145,7 +145,10 @@ exports.submitForm = async (req, res) => {
               cleanNumber = cleanNumber.substring(2);
             } else if (cleanNumber.length === 11 && cleanNumber.startsWith('0')) {
               cleanNumber = cleanNumber.substring(1);
-            } else if (cleanNumber.length !== 10) {
+            }else if (cleanNumber.length === 13 && cleanNumber.startsWith('+91')) {
+              cleanNumber = cleanNumber.substring(3);
+            }  
+            else if (cleanNumber.length !== 10) {
               return res.status(400).json({ 
                 message: 'Invalid phone number format. Please use 10-digit Indian mobile number.' 
               });

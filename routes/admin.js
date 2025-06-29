@@ -241,7 +241,12 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
     }
 
     const phoneNumbers = data.map(row => {
-      const phoneField = row.contactNo || row.phone || row.mobile || row.number;
+      let phoneField = row.contactNo || row.phone || row.mobile || row.number;
+
+      if (!phoneField) {
+      let firstColKey = Object.keys(row)[0];
+      phoneField = row[firstColKey];
+      }
       if (!phoneField) return null;
       
       let number = phoneField.toString().replace(/\D/g, '');
@@ -250,6 +255,8 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
         number = number.substring(2);
       } else if (number.length === 11 && number.startsWith('0')) {
         number = number.substring(1);
+      }else if(number.startsWith('+91') && number.length === 13){
+        number = number.substring(3);
       }
       
       if (!/^[6-9]\d{9}$/.test(number)) {
@@ -260,7 +267,7 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
       return number;
     }).filter(num => num !== null);
 
-    console.log(`📱 Processed ${phoneNumbers.length} valid numbers from ${data.length} rows`);
+    console.log(`📱 Processed ${phoneNumbers.length} valid numbers from ${data.length} rows`,phoneNumbers);
 
     if (phoneNumbers.length === 0) {
       return res.status(400).json({ message: 'No valid phone numbers found in the file' });
@@ -345,7 +352,10 @@ router.post('/send-message', adminAuth, async (req, res) => {
       cleanNumber = cleanNumber.substring(2);
     } else if (cleanNumber.length === 11 && cleanNumber.startsWith('0')) {
       cleanNumber = cleanNumber.substring(1);
-    } else if (cleanNumber.length !== 10) {
+    } else if (cleanNumber.length === 13 && cleanNumber.startsWith('+91')) {
+      cleanNumber = cleanNumber.substring(3);
+    } 
+    else if (cleanNumber.length !== 10) {
       return res.status(400).json({ 
         message: 'Invalid phone number format. Please use 10-digit Indian mobile number.' 
       });
