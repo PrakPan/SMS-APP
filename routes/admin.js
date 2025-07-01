@@ -28,7 +28,16 @@ const fast2smsConfig = {
   bulkUrl: 'https://www.fast2sms.com/dev/v3/bulk'
 };
 
-const sendSMS = async (numbers, message, templateId = null, retryCount = 0) => {
+const messages = [
+  "Thank You for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY",
+  `Thank You {#VAR#} for submitting your feedback. Detailed google form link is down below:
+
+Regards
+SECURECORE SUPPLY`,
+];
+
+
+const sendSMS = async (numbers, message, index, templateId = null, retryCount = 0) => {
   const MAX_RETRIES = 2;
   
   try {
@@ -38,7 +47,7 @@ const sendSMS = async (numbers, message, templateId = null, retryCount = 0) => {
 
     if (process.env.FAST2SMS_TEMPLATE_ID && process.env.FAST2SMS_ENTITY_ID && process.env.FAST2SMS_SENDER_ID) {
       payload = {
-        message: "Thank You  for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY",
+        message: messages[index],
         route: 'dlt_manual',
         numbers: numbers,
         sender_id: process.env.FAST2SMS_SENDER_ID,
@@ -89,7 +98,7 @@ const sendSMS = async (numbers, message, templateId = null, retryCount = 0) => {
       console.log(`🔄 Retrying SMS send (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
       
       await new Promise(resolve => setTimeout(resolve, 3000 * (retryCount + 1)));
-      return await sendSMS(numbers, message, templateId, retryCount + 1);
+      return await sendSMS(numbers, message, index, templateId, retryCount + 1);
     }
     
     throw new Error(`Fast2SMS API Error after ${MAX_RETRIES} retries: ${error.response?.data?.message || error.message}`);
@@ -226,6 +235,7 @@ const checkDeliveryStatusNew = async (requestId) => {
 router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
+    const index = req.body;
     if (!file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
@@ -235,7 +245,7 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
     const sheet = workbook.Sheets[sheetName];
     const data = xlsx.utils.sheet_to_json(sheet);
 
-    const message = "Thank You  for submitting your feedback. Detailed google form link is down below: Regards SECURECORE SUPPLY"
+    const message = messages[index];
     if (!message) {
       return res.status(400).json({ message: 'Message is required' });
     }
@@ -285,7 +295,7 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
       try {
         console.log(`📤 Sending batch ${Math.floor(i/BATCH_SIZE) + 1} with ${batch.length} numbers...`);
         
-        const result = await sendSMS(numbersString, message);
+        const result = await sendSMS(numbersString, message, index);
         
         results.push({
           batch: Math.floor(i/BATCH_SIZE) + 1,
@@ -340,7 +350,7 @@ router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => 
 
 router.post('/send-message', adminAuth, async (req, res) => {
   try {
-    const { phoneNumber, message } = req.body;
+    const { phoneNumber, index } = req.body;
 
     if (!phoneNumber) {
       return res.status(400).json({ message: 'Phone number and message are required' });
@@ -368,7 +378,7 @@ router.post('/send-message', adminAuth, async (req, res) => {
     }
 
     try {
-      const result = await sendSMS(cleanNumber, message);
+      const result = await sendSMS(cleanNumber, index, index);
       
       
       if (result.success) {
@@ -436,5 +446,13 @@ router.get('/get-message', adminAuth, async (req, res) => {
         res.status(500).json({ message: 'Server error', error });
     }
 });
+
+
+router.get('/dlt-message', adminAuth, async (req, res) => {
+     
+    res.status(200).json({ message: messages });
+    
+});
+
 
 module.exports = router;
