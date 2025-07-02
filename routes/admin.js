@@ -235,7 +235,7 @@ const checkDeliveryStatusNew = async (requestId) => {
 router.post('/broadcast', adminAuth, upload.single('file'), async (req, res) => {
   try {
     const file = req.file;
-    const index = req.body;
+    const { index } = req.body;
     if (!file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
